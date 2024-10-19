@@ -1,0 +1,19 @@
+{
+  "result": [
+    {
+      "audio_url": "https://lf-bot-studio-plugin-resource.coze.cn/obj/bot-studio-platform-plugin-tos/sami/tts/d22f1ca1f7854aa3980b530220731a50.mp3",
+      "character": "boy",
+      "sentence": "欢迎大家收听我们的播客节目，今天我们要聊一本关于自控力的书，书名就叫《自控力》。我是乐橙。"
+    },
+    {
+      "audio_url": "https://lf-bot-studio-plugin-resource.coze.cn/obj/bot-studio-platform-plugin-tos/sami/tts/d3df3441a9bc496eaffd100375aabd2e.mp3",
+      "character": "girl",
+      "sentence": "大家好，我是一朵。其实这本书我没读过，但是看到它的书名，就觉得非常实用。毕竟生活中有太多时候需要自控力了。所以，乐橙，你能先简单介绍一下这本书吗？"
+    },
+    {
+      "audio_url": "https://lf-bot-studio-plugin-resource.coze.cn/obj/bot-studio-platform-plugin-tos/sami/tts/04d2cdac3b11443f93319d0bcf85e806.mp3",
+      "character": "boy",
+      "sentence": "当然可以。"
+    }
+  ]
+}
