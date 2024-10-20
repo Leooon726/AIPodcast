@@ -8,6 +8,7 @@ import os
 from moviepy.editor import TextClip, CompositeVideoClip
 from moviepy.video.tools.subtitles import SubtitlesClip
 from moviepy.editor import ColorClip
+import time
 
 # Specify the path to the ImageMagick binary
 change_settings({"IMAGEMAGICK_BINARY": r"C:\Program Files\ImageMagick-7.1.1-Q16-HDRI\magick.exe"})
@@ -55,8 +56,108 @@ class VideoCrafter():
         self.output_dir = os.path.dirname(self.output_path)
         self.audio_fadeout_duration = config.get('audio_fadeout_duration')
         self.bgm_volume = config.get('bgm_volume')
-        self.clips = config.get('clips', [])
+        self.clips_config = config.get('clips', [])
         self.config = config
+        # include audio_clip, image_clip, duration, subtitle_text
+        self.clips_info_dicts = []
+
+    def _create_final_audio(self):
+        cur_start_time = 0
+        for clip_config in self.clips_config:
+            cur_clip_info_dict = {}
+            cur_clip_info_dict['audio_clip'] = self.create_audio_clip(clip_config)
+            cur_clip_info_dict['image_clip'] = self.create_image_clip(clip_config, cur_clip_info_dict['audio_clip'].duration)
+            cur_clip_info_dict['duration'] = cur_clip_info_dict['audio_clip'].duration
+            cur_clip_info_dict['subtitle_text'] = clip_config.get('subtitle_text', '')
+            cur_clip_info_dict['start_time'] = cur_start_time
+            cur_start_time += cur_clip_info_dict['duration']
+            self.clips_info_dicts.append(cur_clip_info_dict)
+
+        total_duration = sum(clip_info_dict['duration'] for clip_info_dict in self.clips_info_dicts)
+
+        audio_clips = [cur_clip_info_dict['audio_clip'] for cur_clip_info_dict in self.clips_info_dicts]
+        concatenated_audio = concatenate_audioclips(audio_clips)
+
+        if self.bgm_path and self.bgm_path != -1:
+            bgm_clip = AudioFileClip(self.bgm_path).volumex(self.bgm_volume)
+            bgm_clip = bgm_clip.subclip(0, total_duration).audio_fadeout(self.audio_fadeout_duration)
+            final_audio = CompositeAudioClip([concatenated_audio, bgm_clip])
+        else:
+            final_audio = concatenated_audio
+
+        return final_audio
+    
+    def create_pure_audio(self):
+        audio_clip = self._create_final_audio()
+        audio_clip.write_audiofile(self.output_path, codec='mp3', fps=44100)
+
+    def create(self):
+        # check if the output_path is a pure audio file
+        if self.output_path.lower().endswith(('.mp3', '.wav', '.m4a')):
+            self.create_pure_audio()
+        else:
+            self.create_video_fast()
+
+    def create_video_fast(self):
+        '''This implementation could be two times faster than the create_video method'''
+        cur_start_time = 0
+        for clip_config in self.clips_config:
+            cur_clip_info_dict = {}
+            cur_clip_info_dict['audio_clip'] = self.create_audio_clip(clip_config)
+            cur_clip_info_dict['image_clip'] = self.create_image_clip(clip_config, cur_clip_info_dict['audio_clip'].duration)
+            cur_clip_info_dict['duration'] = cur_clip_info_dict['audio_clip'].duration
+            cur_clip_info_dict['subtitle_text'] = clip_config.get('subtitle_text', '')
+            cur_clip_info_dict['start_time'] = cur_start_time
+            cur_start_time += cur_clip_info_dict['duration']
+            self.clips_info_dicts.append(cur_clip_info_dict)
+
+        total_duration = sum(clip_info_dict['duration'] for clip_info_dict in self.clips_info_dicts)
+
+        audio_clips = [cur_clip_info_dict['audio_clip'] for cur_clip_info_dict in self.clips_info_dicts]
+        concatenated_audio = concatenate_audioclips(audio_clips)
+
+        if self.bgm_path and self.bgm_path != -1:
+            bgm_clip = AudioFileClip(self.bgm_path).volumex(self.bgm_volume)
+            bgm_clip = bgm_clip.subclip(0, total_duration).audio_fadeout(self.audio_fadeout_duration)
+            final_audio = CompositeAudioClip([concatenated_audio, bgm_clip])
+        else:
+            final_audio = concatenated_audio
+
+        if self.config.get('background_video_path'):
+            background_clip = self.create_background(duration=total_duration)
+        else:
+            background_clip = ColorClip(size=(self.width, self.height), color=(255, 255, 255)).set_duration(total_duration)
+
+        final_video = background_clip
+        for clip_info_dict in self.clips_info_dicts:
+            video_clip = clip_info_dict['image_clip']
+            if video_clip is not None:
+                video_clip = video_clip.set_start(clip_info_dict['start_time'])
+                video_clip = video_clip.set_position(("center", "center")).resize(height=self.height)
+                final_video = CompositeVideoClip([final_video, video_clip])
+            
+        final_video = final_video.set_audio(final_audio)
+
+        if self.config.get('subtitle_config'):
+            final_video = self.add_subtitle(final_video, self.clips_info_dicts, self.config.get('subtitle_config', {}))
+
+        time_start = time.time()
+        final_video.write_videofile(
+            self.output_path,
+            codec="h264_nvenc",
+            audio_codec='aac',
+            fps=24,
+            threads=8,
+            ffmpeg_params=[
+                "-b:v", "5M",
+                "-preset", "fast",
+                "-rc", "vbr",
+                "-gpu", "0"
+            ]
+        )
+
+        time_end = time.time()
+        print(f"Video created and saved to {self.output_path}, time used: {time_end - time_start:.2f} seconds")
 
     def create_video(self):
         # create an empty video clip with the size of the output video
@@ -64,7 +165,7 @@ class VideoCrafter():
         
         foreground_clips = [canvas_clip]
         clip_info_dicts = []
-        for clip_config in self.clips:
+        for clip_config in self.clips_config:
             video_clip, clip_info_dict = self.create_clip(clip_config)
             video_clip = video_clip.set_position(("center", "center")).resize(height=self.height)
             foreground_clips.append(video_clip)
@@ -85,6 +186,7 @@ class VideoCrafter():
 
         # Specify the fps when writing the video file
         # final_video.write_videofile(self.output_path, codec="h264_nvenc", audio_codec='aac', fps=24, ffmpeg_params=["-b:v", "5M"])
+        time_start = time.time()
         final_video.write_videofile(
             self.output_path, 
             codec="h264_nvenc", 
@@ -98,8 +200,8 @@ class VideoCrafter():
                 "-gpu", "0"  # Ensure the GPU is used if multiple are available
             ]
         )
-
-        print(f"Video created and saved to {self.output_path}")
+        time_end = time.time()
+        print(f"Video created and saved to {self.output_path}, time used: {time_end - time_start:.2f} seconds")
 
     def create_audio_clip(self, clip_config):
         audio_speed = clip_config.get('audio_speed', 1.0)
@@ -111,17 +213,24 @@ class VideoCrafter():
                 audio_clip = AudioFileClip(modified_audio_path)
             else:
                 audio_clip = AudioFileClip(clip_config['audio_path'])
-            
             # Apply fade-in and fade-out to reduce noise
             audio_clip = audio_clip.audio_fadein(0.5).audio_fadeout(0.5)
-        else:
+            # concatenate silence to the end of the audio clip
             silence_duration = int(transition_pause_time * 44100)
+            silence_audio = np.zeros((silence_duration, 2)) # 2 is the number of channels
+            silence_audio_clip = AudioArrayClip(silence_audio, fps=44100)
+            audio_clip = concatenate_audioclips([audio_clip, silence_audio_clip])
+        else:
+            silence_duration = int((clip_config.get('duration', 0)+transition_pause_time) * 44100)
             silence_audio = np.zeros((silence_duration, 2))
             audio_clip = AudioArrayClip(silence_audio, fps=44100)
 
         return audio_clip
     
     def create_image_clip(self, clip_config, image_clip_duration):
+        if not clip_config.get('key_frame_path') or clip_config['key_frame_path'] == -1:
+            return None
+
         # Resize image according to frame_size
         frame_size = clip_config.get('frame_size', {'width': self.width, 'height': self.height})
         target_width = frame_size.get('width', self.width)
@@ -147,6 +256,11 @@ class VideoCrafter():
         
         # Set the opacity of the image clip
         image_clip = ImageClip(resized_image_path).set_duration(image_clip_duration)
+
+        # Apply fade-out effect to the video clip
+        if clip_config.get('fadeout_duration'):
+            fadeout_duration = clip_config.get('fadeout_duration')
+            image_clip = image_clip.crossfadeout(fadeout_duration)
         
         return image_clip
     
@@ -171,10 +285,10 @@ class VideoCrafter():
         else:
             video_clip = ColorClip(size=(1, 1), color=(0, 0, 0, 0)).set_duration(clip_duration).set_audio(audio_clip).set_opacity(0)
 
-        # Apply fade-out effect to the video clip
-        if clip_config.get('fadeout_duration'):
-            fadeout_duration = clip_config.get('fadeout_duration')
-            video_clip = video_clip.crossfadeout(fadeout_duration)
+        # # Apply fade-out effect to the video clip
+        # if clip_config.get('fadeout_duration'):
+        #     fadeout_duration = clip_config.get('fadeout_duration')
+        #     video_clip = video_clip.crossfadeout(fadeout_duration)
 
         clip_info_dict = {
             'duration': clip_duration,
@@ -291,39 +405,83 @@ def change_audio_speed_without_pitch(audio_path, speed_factor, output_dir=None):
     
     return output_path
 
-def test_main_1():
+def test_create_video_fast():
     config = {
-        'height': 1920,
-        'width': 1080,
+        'height': 1080,
+        'width': 1920,
         'bgm_path': 'D:\Study\AIAgent\AIEnglishLearning\static_materials\scott-buckley-reverie(chosic.com).mp3',
-        'background_video_path': 'D:\Study\AIAgent\AIPodcast\\assets\\raining_window_10min.mp4',
+        # 'background_video_path': 'D:\Study\AIAgent\AIPodcast\\assets\\raining_window_10min.mp4',
+        'background_video_path': 'D:\Study\AIAgent\AIPodcast\\assets\\raining_window_img.jpg',
         'output_path': 'D:\Study\AIAgent\AIPodcast\output\output.mp4',
         'audio_fadeout_duration': 2,
         'bgm_volume': 0.5,
+        'subtitle_config': {
+            'y_position': 0.8,
+            'background_color': 'black'
+        },
         'clips': [
             {
-                'audio_path': 'D:\Study\AIAgent\AIEnglishLearning\output\cluster0\\1_output_audio.wav',
-                'key_frame_path': 'D:\Study\AIAgent\AIEnglishLearning\output\cluster0\\1_key_frame_1.jpeg',
+                'audio_path': 'D:\Study\AIAgent\AIPodcast\output\episode_test\downloaded_audios\stretched_audios\\2b625210f2124f05808abf75c0fca9ee_stretched.mp3',
+                'key_frame_path': 'D:\Study\AIAgent\AIPodcast\\assets\logo.png',
+                'frame_size': {'width': -1, 'height': 508},
+                'duration': -1,
+                'transition_pause_time': 2,
+                'audio_speed': 1.0,
+                'subtitle_text': 'This is 是低调a test subtitle',
+                'fadeout_duration': 2
+            },
+            {
+                'audio_path': 'D:\Study\AIAgent\AIPodcast\output\episode_test\downloaded_audios\stretched_audios\\1b628e22456941de8392f891aa630d9a_stretched.mp3',
+                # 'key_frame_path': 'D:\Study\AIAgent\AIEnglishLearning\output\cluster0\\1_key_frame_1.jpeg',
+                'key_frame_path': -1,
                 'frame_size': {'width': -1, 'height': 508},
                 'duration': -1,
                 'transition_pause_time': 1,
-                'audio_speed': 1.2,
-                'subtitle_text': 'This is a test subtitle'
-            },
-            {
-                'audio_path': 'D:\Study\AIAgent\AIEnglishLearning\output\cluster0\\0_output_audio.wav',
-                'key_frame_path': 'D:\Study\AIAgent\AIEnglishLearning\static_materials\卡通女生图片.jpeg',
-                'duration': -1,
-                'transition_pause_time': 2,
-                'audio_speed': 1.0
+                'audio_speed': 1.0,
+                'subtitle_text': 'This is 深度方a test subtitle'
             },
         ]
     }
 
     video_crafter = VideoCrafter(config)
-    video_crafter.create_video()
+    video_crafter.create()
 
-def test_main_2():
+
+def test_create_pure_audio():
+    config = {
+        'height': 1080,
+        'width': 1920,
+        'bgm_path': 'D:\Study\AIAgent\AIEnglishLearning\static_materials\scott-buckley-reverie(chosic.com).mp3',
+        'output_path': 'D:\Study\AIAgent\AIPodcast\output\output.mp3',
+        'audio_fadeout_duration': 2,
+        'bgm_volume': 0.5,
+        'clips': [
+            {
+                'audio_path': 'D:\Study\AIAgent\AIPodcast\output\episode_test\downloaded_audios\stretched_audios\\2b625210f2124f05808abf75c0fca9ee_stretched.mp3',
+                'frame_size': {'width': -1, 'height': 508},
+                'duration': -1,
+                'transition_pause_time': 2,
+                'audio_speed': 1.0,
+                'subtitle_text': 'This is 是低调a test subtitle',
+                'fadeout_duration': 2
+            },
+            {
+                'audio_path': 'D:\Study\AIAgent\AIPodcast\output\episode_test\downloaded_audios\stretched_audios\\1b628e22456941de8392f891aa630d9a_stretched.mp3',
+                'key_frame_path': -1,
+                'frame_size': {'width': -1, 'height': 508},
+                'duration': -1,
+                'transition_pause_time': 1,
+                'audio_speed': 1.0,
+                'subtitle_text': 'This is 深度方a test subtitle'
+            },
+        ]
+    }
+
+    video_crafter = VideoCrafter(config)
+    video_crafter.create()
+
+
+def test_create_video():
     config = {
         'height': 1080,
         'width': 1920,
@@ -371,12 +529,15 @@ def test_change_audio_speed_without_pitch():
     change_audio_speed_without_pitch('D:\Study\AIAgent\AIPodcast\output\\test_input.mp3', 1.2, 'D:\Study\AIAgent\AIPodcast\output')
 
 if __name__ == '__main__':
-    # test_main_1()
+    test_create_video_fast()
 
-    test_main_2()
+    # test_create_video()
+
+    # test_create_pure_audio()
 
     # test_resize_image()
 
     # test_change_audio_speed_without_pitch()
+
 
 
