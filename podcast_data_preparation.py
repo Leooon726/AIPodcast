@@ -12,17 +12,19 @@ class PodcastDataJsonReader:
 
 
 class PodcastDataPreparation:
-    def __init__(self, json_path, output_dir):
+    def __init__(self, json_path, output_dir, video_width, video_height, key_frame_path):
         self.url_data_list = PodcastDataJsonReader(json_path).read_json()
         self.output_dir = output_dir
         if not os.path.exists(self.output_dir):
             os.makedirs(self.output_dir)
-        self.key_frame_path = 'D:\Study\AIAgent\AIEnglishLearning\static_materials\卡通女生图片.jpeg'
+        self.video_width = video_width
+        self.video_height = video_height
+        self.key_frame_path = key_frame_path
 
     def get_basic_video_info(self):
         return {
-            'height': 1920,
-            'width': 1080,
+            'height': self.video_height,
+            'width': self.video_width,
             # 'bgm_path': 'D:\Study\AIAgent\AIEnglishLearning\static_materials\scott-buckley-reverie(chosic.com).mp3',
             'bgm_path': -1,
             'output_path': os.path.join(self.output_dir, 'output.mp4'),
@@ -38,17 +40,22 @@ class PodcastDataPreparation:
                 'audio_path': self.download_audio(item['audio_url']),
                 'key_frame_path': self.key_frame_path,
                 'duration': -1,
-                'transition_pause_time': 1,
-                'audio_speed': 1.0
+                'transition_pause_time': 0.5,
+                'audio_speed': 1.1
             }
             video_info_config['clips'].append(clip_info)
         return video_info_config
 
     def download_audio(self, url):
-        local_filename = os.path.join(self.output_dir, url.split('/')[-1])
+        output_dir = os.path.join(self.output_dir, 'downloaded_audios')
+        if not os.path.exists(output_dir):
+            os.makedirs(output_dir)
+
+        local_filename = os.path.join(output_dir, url.split('/')[-1])
         if os.path.exists(local_filename):
             print(f"File {local_filename} already exists")
             return local_filename
+        
         with requests.get(url, stream=True) as r:
             r.raise_for_status()
             with open(local_filename, 'wb') as f:

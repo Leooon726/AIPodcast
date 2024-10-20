@@ -55,7 +55,7 @@ class VideoCrafter():
         if clip_config['audio_path'] != -1:
             # Change audio speed without altering pitch
             if audio_speed != 1.0:
-                modified_audio_path = change_audio_speed_without_pitch(clip_config['audio_path'], audio_speed, self.output_dir)
+                modified_audio_path = change_audio_speed_without_pitch(clip_config['audio_path'], audio_speed)
                 audio_clip = AudioFileClip(modified_audio_path)
             else:
                 audio_clip = AudioFileClip(clip_config['audio_path'])
@@ -73,8 +73,9 @@ class VideoCrafter():
             clip_duration = audio_clip.duration + transition_pause_time
         
         # resize image do not change the original image
-        image_name = os.path.basename(clip_config['key_frame_path']).replace('.jpeg', '_resized.jpeg')
-        resized_image_path = os.path.join(self.output_dir, image_name)
+        image_name, image_extension = os.path.splitext(os.path.basename(clip_config['key_frame_path']))
+        resized_image_name = f"{image_name}_resized{image_extension}"
+        resized_image_path = os.path.join(self.output_dir, resized_image_name)
         self.resize_image(clip_config['key_frame_path'], resized_image_path, (self.width, self.height))
         print(f"Image resized and saved to {resized_image_path}")
         image_clip = ImageClip(resized_image_path).set_duration(clip_duration)
@@ -104,10 +105,12 @@ class VideoCrafter():
 
 
 def change_audio_speed_without_pitch(audio_path, speed_factor, output_dir=None):
+    file_extension = os.path.splitext(audio_path)[1]
     if output_dir is None:
-        output_path = audio_path.replace('.wav', '_stretched.wav')
-    else:
-        output_path = os.path.join(output_dir, os.path.basename(audio_path).replace('.wav', '_stretched.wav'))
+        output_dir = os.path.join(os.path.dirname(audio_path), 'stretched_audios')
+    if not os.path.exists(output_dir):
+        os.makedirs(output_dir)
+    output_path = os.path.join(output_dir, os.path.basename(audio_path).replace(file_extension, f'_stretched{file_extension}'))
     
     # Use ffmpeg to change audio speed without altering pitch
     command = f'ffmpeg -i "{audio_path}" -filter:a "atempo={speed_factor}" -vn "{output_path}"'
@@ -115,7 +118,7 @@ def change_audio_speed_without_pitch(audio_path, speed_factor, output_dir=None):
     
     return output_path
 
-if __name__ == '__main__':
+def test_main():
     config = {
         'height': 1920,
         'width': 1080,
@@ -144,4 +147,15 @@ if __name__ == '__main__':
     video_crafter = VideoCrafter(config)
     video_crafter.create_video()
 
-    # video_crafter.resize_image('D:\Study\AIAgent\AIEnglishLearning\static_materials\卡通女生图片.jpeg', 'D:\Study\AIAgent\AIPodcast\output\卡通女生图片_resized.jpeg', (1080, 1920))
+def test_resize_image():
+    VideoCrafter.resize_image('D:\Study\AIAgent\AIEnglishLearning\static_materials\卡通女生图片.jpeg', 'D:\Study\AIAgent\AIPodcast\output\卡通女生图片_resized.jpeg', (1080, 1920))
+
+def test_change_audio_speed_without_pitch():
+    change_audio_speed_without_pitch('D:\Study\AIAgent\AIPodcast\output\\test_input.mp3', 1.2, 'D:\Study\AIAgent\AIPodcast\output')
+
+if __name__ == '__main__':
+    # test_main()
+
+    # test_resize_image()
+
+    test_change_audio_speed_without_pitch()
