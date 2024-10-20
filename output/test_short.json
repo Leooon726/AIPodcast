@@ -1,0 +1,19 @@
+{
+  "result": [
+    {
+      "audio_url": "https://lf-bot-studio-plugin-resource.coze.cn/obj/bot-studio-platform-plugin-tos/sami/tts/2d27e70c6e32483495e322d45375e37d.mp3",
+      "character": "boy",
+      "sentence": "欢迎大家收听我们的播客节目，我是乐橙。"
+    },
+    {
+      "audio_url": "https://lf-bot-studio-plugin-resource.coze.cn/obj/bot-studio-platform-plugin-tos/sami/tts/933fed90b0724a7e9fcd9c6f439c1b63.mp3",
+      "character": "girl",
+      "sentence": "大家好，我是一朵。今天我特别好奇，因为我没读过《自控力》这本书，所以想请教乐橙，你能简单介绍一下吗？听说是关于意志力的？"
+    },
+    {
+      "audio_url": "https://lf-bot-studio-plugin-resource.coze.cn/obj/bot-studio-platform-plugin-tos/sami/tts/71c6965d519c4441a15dbec4ff68b9af.mp3",
+      "character": "boy",
+      "sentence": "嗯，对的。这本书其实主要在讲...怎么说呢，就是如何通过一些训练，让我们的意志力变得更强。书里提到很多方法，可以帮助我们达成目标，少出差错。"
+    }
+  ]
+}
