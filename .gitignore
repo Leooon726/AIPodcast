@@ -21,6 +21,7 @@ __pycache__/
 *.m4a
 *.aac
 *.wma
+output/*
 
 # C extensions
 *.so
