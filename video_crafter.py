@@ -259,10 +259,11 @@ class VideoCrafter():
             # Apply fade-in and fade-out to reduce noise
             audio_clip = audio_clip.audio_fadein(0.5).audio_fadeout(0.5)
             # concatenate silence to the end of the audio clip
-            silence_duration = int(transition_pause_time * 44100)
-            silence_audio = np.zeros((silence_duration, 2)) # 2 is the number of channels
-            silence_audio_clip = AudioArrayClip(silence_audio, fps=44100)
-            audio_clip = concatenate_audioclips([audio_clip, silence_audio_clip])
+            if transition_pause_time > 0:
+                silence_duration = int(transition_pause_time * 44100)
+                silence_audio = np.zeros((silence_duration, 2)) # 2 is the number of channels
+                silence_audio_clip = AudioArrayClip(silence_audio, fps=44100)
+                audio_clip = concatenate_audioclips([audio_clip, silence_audio_clip])
         else:
             silence_duration = int((clip_config.get('duration', 0)+transition_pause_time) * 44100)
             silence_audio = np.zeros((silence_duration, 2))
@@ -309,7 +310,7 @@ class VideoCrafter():
             resized_image_path = clip_config['key_frame_path']
             print(f"Image does not need resizing. Using original image: {resized_image_path}")
         # Set the opacity of the image clip
-        image_clip = ImageClip(resized_image_path).set_duration(image_clip_duration)
+        image_clip = ImageClip(resized_image_path).set_duration(image_clip_duration).set_position(('center', 'center'))
 
         # Add movement to the image clip
         if clip_config.get('movement'):
@@ -365,8 +366,19 @@ class VideoCrafter():
         return video_clip, clip_info_dict
 
     def split_subtitle_text(self, subtitle_text, text_length_limit=25):
+        '''The unit of text_length_limit is chinese character.'''
+        def get_text_length(text):
+            # a english letter is 0.5 chinese character
+            text_length = 0
+            for char in text:
+                if char.isascii():
+                    text_length += 0.5
+                else:
+                    text_length += 1
+            return int(text_length)
+
         # Split the text based on punctuation
-        punctuation = "，。；！？"
+        punctuation = "，。；！？ .,"
         pieces = re.split(f'([{punctuation}])', subtitle_text)
         result = []
         current_piece = ""
@@ -375,39 +387,51 @@ class VideoCrafter():
         for piece in pieces:
             if piece in punctuation:
                 current_piece += piece
-                if len(current_piece) > text_length_limit:
+                if get_text_length(current_piece) > text_length_limit:
                     result.append(current_piece)
                     current_piece = ""
             else:
-                if len(current_piece) + len(piece) > text_length_limit:
+                if get_text_length(current_piece) + get_text_length(piece) > text_length_limit:
                     result.append(current_piece)
                     current_piece = piece
                 else:
                     current_piece += piece
-        
         if current_piece:
             result.append(current_piece)
         
         # Split merged pieces that are longer than text_length_limit by determining the number of pieces needed, then split accordingly.
         final_result = []
         for piece in result:
-            if len(piece) > text_length_limit:
-                piece_num = (len(piece) + text_length_limit - 1) // text_length_limit
-                split_length = len(piece) // piece_num
+            if get_text_length(piece) > text_length_limit:
+                piece_num = (get_text_length(piece) + text_length_limit - 1) // text_length_limit
+                # split the piece into words, for chinese words, split by character, for english words, split by space.
+                word_list = re.findall(r'[\u4e00-\u9fff]|[a-zA-Z]+|\s+|[^\u4e00-\u9fff\s]', piece)
+                word_per_subpiece = len(word_list) // piece_num
                 for i in range(piece_num - 1):
-                    final_result.append(piece[i * split_length:(i + 1) * split_length])
-                final_result.append(piece[(piece_num - 1) * split_length:])
+                    cur_subpiece = ''.join(word_list[i * word_per_subpiece:(i + 1) * word_per_subpiece])
+                    final_result.append(cur_subpiece)
+                final_result.append(''.join(word_list[(piece_num - 1) * word_per_subpiece:]))
             else:
                 final_result.append(piece)
-        
+
+        # if a piece is start with a symbol that should not be at the start of a subtitle, 
+        # append the symbol to the previous piece, if start with a space, remove the space.
+        symbols_should_not_at_start = punctuation + " 》”"
+        for i in range(len(final_result)):
+            if final_result[i] and final_result[i][0] in symbols_should_not_at_start:
+                final_result[i-1] += final_result[i][0]
+                final_result[i] = final_result[i][1:]
+            elif final_result[i] and final_result[i][0] == ' ':
+                final_result[i] = final_result[i][1:]
         return final_result
 
-    def add_subtitle(self, video_clip, clip_info_dicts, subtitle_config, text_length_limit=25):
+    def add_subtitle(self, video_clip, clip_info_dicts, subtitle_config):
         font_size = subtitle_config.get('fontsize', 50)
         font_color = subtitle_config.get('color', 'white')
         stroke_color = subtitle_config.get('stroke_color', None)
         stroke_width = subtitle_config.get('stroke_width', 0)
         background_color = subtitle_config.get('background_color', None)
+        text_length_limit = subtitle_config.get('text_length_limit', 25)
         
         def append_subtitle(subs, subtitle_text, duration, sub_start_time):
             if subtitle_text == '':
@@ -448,7 +472,6 @@ class VideoCrafter():
                 subs = append_subtitle(subs, subtitle_text, clip_info['duration'], sub_start_time)
                 # subs.append(((sub_start_time, sub_start_time + clip_info['duration']), subtitle_text))
                 sub_start_time += clip_info['duration']
-        print(subs)
         # Create the SubtitlesClip
         subtitles = SubtitlesClip(subs, subtitle_generator)
 
@@ -487,7 +510,22 @@ class VideoCrafter():
 
     def add_bgm(self, video_clip):
         bgm_clip = AudioFileClip(self.bgm_path).volumex(self.bgm_volume)
-        bgm_clip = bgm_clip.subclip(0, video_clip.duration).audio_fadeout(self.audio_fadeout_duration)
+        
+        # If bgm is shorter than video, loop it
+        if bgm_clip.duration < video_clip.duration:
+            num_loops = int(video_clip.duration / bgm_clip.duration) + 1
+            bgm_clips = []
+            for i in range(num_loops):
+                start_time = i * bgm_clip.duration
+                end_time = min((i + 1) * bgm_clip.duration, video_clip.duration)
+                loop_clip = bgm_clip.subclip(0, end_time - start_time)
+                if i == num_loops - 1:  # Add fadeout to last clip
+                    loop_clip = loop_clip.audio_fadeout(self.audio_fadeout_duration)
+                bgm_clips.append(loop_clip)
+            bgm_clip = concatenate_audioclips(bgm_clips)
+        else:
+            bgm_clip = bgm_clip.subclip(0, video_clip.duration).audio_fadeout(self.audio_fadeout_duration)
+            
         final_audio = CompositeAudioClip([video_clip.audio, bgm_clip])
         final_video = video_clip.set_audio(final_audio)
         return final_video
@@ -585,7 +623,8 @@ def test_movement():
         'bgm_volume': 0.5,
         'subtitle_config': {
             'y_position': 0.8,
-            'background_color': 'black'
+            'background_color': 'black',
+            'text_length_limit': 25
         },
         'clips': [
             {
@@ -595,7 +634,7 @@ def test_movement():
                 'duration': -1,
                 'transition_pause_time': 2,
                 'audio_speed': 1.0,
-                'subtitle_text': 'This is 是低调a test subtitle',
+                'subtitle_text': 'This is 是低调 a test subtitle, This is 是低调 a test subtitle. This is 是低调 a test subtitle.',
                 'fadeout_duration': 2,
                 'movement': {'type': 'zoom', 'start_resize_ratio': 1.2, 'end_resize_ratio': 1.}
                 # 'movement': {'type': 'pan'}
@@ -672,19 +711,19 @@ def test_create_video():
                 'duration': -1,
                 'transition_pause_time': 2,
                 'audio_speed': 1.0,
-                'subtitle_text': 'This is 是低调a test subtitle',
+                'subtitle_text': 'This is 是低调 a test subtitle, This is 是低调 a test subtitle. This is 是低调 a test subtitle.',
                 'fadeout_duration': 2
             },
-            {
-                'audio_path': 'D:\Study\AIAgent\AIPodcast\output\episode_test\downloaded_audios\stretched_audios\\1b628e22456941de8392f891aa630d9a_stretched.mp3',
-                # 'key_frame_path': 'D:\Study\AIAgent\AIEnglishLearning\output\cluster0\\1_key_frame_1.jpeg',
-                'key_frame_path': -1,
-                'frame_size': {'width': -1, 'height': 508},
-                'duration': -1,
-                'transition_pause_time': 1,
-                'audio_speed': 1.0,
-                'subtitle_text': 'This is 深度方a test subtitle'
-            },
+            # {
+            #     'audio_path': 'D:\Study\AIAgent\AIPodcast\output\episode_test\downloaded_audios\stretched_audios\\1b628e22456941de8392f891aa630d9a_stretched.mp3',
+            #     # 'key_frame_path': 'D:\Study\AIAgent\AIEnglishLearning\output\cluster0\\1_key_frame_1.jpeg',
+            #     'key_frame_path': -1,
+            #     'frame_size': {'width': -1, 'height': 508},
+            #     'duration': -1,
+            #     'transition_pause_time': 1,
+            #     'audio_speed': 1.0,
+            #     'subtitle_text': 'This is 深度方a test subtitle'
+            # },
         ]
     }
 
@@ -709,7 +748,8 @@ def test_subtitle_split():
         'bgm_volume': 0.5,
         'subtitle_config': {
             'y_position': 0.8,
-            'background_color': 'black'
+            'background_color': 'black',
+            'text_length_limit': 20
         },
         'clips': [
             {
@@ -741,12 +781,17 @@ def test_subtitle_split():
     for text in splited_text:
         print(text, len(text))
 
+    english_subtitle_text = "Two people were very scared. They ran around blindly in the cave. They couldn't find the exit. When they were hungry and tired and almost hopeless, suddenly they heard a creepy laugh. After listening carefully, it was Joe the murderer. Tom quickly covered Becky's mouth. The two hid carefully. They were very afraid."
+    splited_text = video_crafter.split_subtitle_text(english_subtitle_text, 20)
+    for text in splited_text:
+        print(text, len(text))
+
 if __name__ == '__main__':
-    # test_subtitle_split()
+    test_subtitle_split()
 
     # test_create_video_fast()
 
-    test_movement()
+    # test_movement()
 
     # test_create_video()
 
